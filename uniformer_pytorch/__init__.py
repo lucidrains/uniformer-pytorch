@@ -1,0 +1,1 @@
+from uniformer_pytorch.uniformer_pytorch import Uniformer
