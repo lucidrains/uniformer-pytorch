@@ -1,6 +1,6 @@
 <img src="./uniformer.png" width="400px"></img>
 
-## Uniformer - Pytorch (wip)
+## Uniformer - Pytorch
 
 Implementation of <a href="https://openreview.net/forum?id=nBU_u6DLvoK">Uniformer</a>, a simple attention and 3d convolutional net that achieved SOTA in a number of video classification tasks
 
