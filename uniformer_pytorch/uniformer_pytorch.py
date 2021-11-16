@@ -2,7 +2,6 @@ import torch
 from torch import nn, einsum
 from einops import rearrange
 from einops.layers.torch import Reduce
-import torch.nn.functional as F
 
 # helpers
 
