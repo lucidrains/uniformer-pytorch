@@ -12,6 +12,8 @@ $ pip install uniformer-pytorch
 
 ## Usage
 
+Uniformer-S
+
 ```python
 import torch
 from uniformer_pytorch import Uniformer
@@ -26,6 +28,18 @@ model = Uniformer(
 video = torch.randn(1, 3, 8, 224, 224)  # (batch, channels, time, height, width)
 
 logits = model(video) # (1, 1000)
+```
+
+Uniformer-B
+
+```python
+import torch
+from uniformer_pytorch import Uniformer
+
+model = Uniformer(
+    num_classes = 1000
+    depths = (5, 8, 20, 7)
+)
 ```
 
 ## Citations
