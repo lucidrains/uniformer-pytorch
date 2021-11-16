@@ -32,6 +32,128 @@ def FeedForward(dim, mult = 4, dropout = 0.):
         nn.Conv3d(dim * mult, dim, 1)
     )
 
+# MHRAs (multi-head relation aggregators)
+
+class LocalMHRA(nn.Module):
+    def __init__(
+        self,
+        dim,
+        heads,
+        dim_head = 64,
+        local_aggr_kernel = 5
+    ):
+        super().__init__()
+        self.heads = heads
+        inner_dim = dim_head * heads
+
+        # they use batchnorm for the local MHRA instead of layer norm
+        self.norm = nn.BatchNorm3d(dim)
+
+        # only values, as the attention matrix is taking care of by a convolution
+        self.to_v = nn.Conv3d(dim, inner_dim, 1, bias = False)
+
+        # this should be equivalent to aggregating by an attention matrix parameterized as a function of the relative positions across each axis
+        self.rel_pos = nn.Conv3d(heads, heads, local_aggr_kernel, padding = local_aggr_kernel // 2, groups = heads)
+
+        # combine out across all the heads
+        self.to_out = nn.Conv3d(inner_dim, dim, 1)
+
+    def forward(self, x):
+        x = self.norm(x)
+
+        b, c, *_, h = *x.shape, self.heads
+
+        # to values
+        v = self.to_v(x)
+
+        # split out heads
+        v = rearrange(v, 'b (c h) ... -> (b c) h ...', h = h)
+
+        # aggregate by relative positions
+        out = self.rel_pos(v)
+
+        # combine heads
+        out = rearrange(out, '(b c) h ... -> b (c h) ...', b = b)
+        return self.to_out(out)
+
+class GlobalMHRA(nn.Module):
+    def __init__(
+        self,
+        dim,
+        heads,
+        dim_head = 64,
+        dropout = 0.
+    ):
+        super().__init__()
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+        inner_dim = dim_head * heads
+
+        self.norm = LayerNorm(dim)
+        self.to_qkv = nn.Conv1d(dim, inner_dim * 3, 1, bias = False)
+        self.to_out = nn.Conv1d(inner_dim, dim, 1)
+
+    def forward(self, x):
+        x = self.norm(x)
+
+        shape, h = x.shape, self.heads
+
+        x = rearrange(x, 'b c ... -> b c (...)')
+
+        q, k, v = self.to_qkv(x).chunk(3, dim = 1)
+        q, k, v = map(lambda t: rearrange(t, 'b (h d) n -> b h n d', h = h), (q, k, v))
+
+        q = q * self.scale
+        sim = einsum('b h i d, b h j d -> b h i j', q, k)
+
+        # attention
+        attn = sim.softmax(dim = -1)
+
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b (h d) n', h = h)
+
+        out = self.to_out(out)
+        return out.view(*shape)
+
+class Transformer(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        depth,
+        heads,
+        mhsa_type = 'g',
+        dim_head = 64,
+        ff_mult = 4,
+        ff_dropout = 0.,
+        attn_dropout = 0.
+    ):
+        super().__init__()
+
+        self.layers = nn.ModuleList([])
+
+        for _ in range(depth):
+            if mhsa_type == 'l':
+                attn = LocalMHRA(dim, heads = heads, dim_head = dim_head)
+            elif mhsa_type == 'g':
+                attn = GlobalMHRA(dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)
+            else:
+                raise ValueError('unknown mhsa_type')
+
+            self.layers.append(nn.ModuleList([
+                nn.Conv3d(dim, dim, 3, padding = 1),
+                attn,
+                FeedForward(dim, mult = ff_mult, dropout = ff_dropout),
+            ]))
+
+    def forward(self, x):
+        for dpe, attn, ff in self.layers:
+            x = dpe(x) + x
+            x = attn(x) + x
+            x = ff(x) + x
+
+        return x
+
 # main class
 
 class Uniformer(nn.Module):
@@ -41,25 +163,36 @@ class Uniformer(nn.Module):
         num_classes,
         dims = (64, 128, 256, 512),
         depths = (3, 4, 8, 3),
-        attn_types = ('l', 'l', 'g', 'g'),
+        mhsa_types = ('l', 'l', 'g', 'g'),
         channels = 3,
         ff_mult = 4,
-        ff_dropout = 0.
+        dim_head = 64,
+        ff_dropout = 0.,
+        attn_dropout = 0.
     ):
         super().__init__()
         init_dim, *_, last_dim = dims
         self.to_tokens = nn.Conv3d(channels, init_dim, (3, 4, 4), stride = (2, 4, 4), padding = (1, 0, 0))
 
         dim_in_out = tuple(zip(dims[:-1], dims[1:]))
+        mhsa_types = tuple(map(lambda t: t.lower(), mhsa_types))
+
         self.stages = nn.ModuleList([])
 
-        for ind, depth in enumerate(depths):
+        for ind, (depth, mhsa_type) in enumerate(zip(depths, mhsa_types)):
             is_last = ind == len(depths) - 1
             stage_dim = dims[ind]
+            heads = stage_dim // dim_head
 
             self.stages.append(nn.ModuleList([
-                nn.Conv3d(stage_dim, stage_dim, 3, padding = 1),
-                FeedForward(stage_dim, mult = ff_mult, dropout = ff_dropout),
+                Transformer(
+                    dim = stage_dim,
+                    depth = depth,
+                    heads = heads,
+                    ff_mult = ff_mult,
+                    ff_dropout = ff_dropout,
+                    attn_dropout = attn_dropout
+                ),
                 nn.Sequential(
                     LayerNorm(stage_dim),
                     nn.Conv3d(stage_dim, dims[ind + 1], (1, 2, 2), stride = (1, 2, 2)),
@@ -73,13 +206,12 @@ class Uniformer(nn.Module):
         )
 
     def forward(self, video):
-        tokens = self.to_tokens(video)
+        x = self.to_tokens(video)
 
-        for dpe, ff, conv in self.stages:
-            tokens = dpe(tokens) + tokens
-            tokens = ff(tokens) + tokens
+        for transformer, conv in self.stages:
+            x = transformer(x)
 
             if exists(conv):
-                tokens = conv(tokens)
+                x = conv(x)
 
-        return self.to_logits(tokens)
+        return self.to_logits(x)
