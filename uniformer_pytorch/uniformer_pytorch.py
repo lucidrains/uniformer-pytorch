@@ -123,6 +123,7 @@ class Transformer(nn.Module):
         depth,
         heads,
         mhsa_type = 'g',
+        local_aggr_kernel = 5,
         dim_head = 64,
         ff_mult = 4,
         ff_dropout = 0.,
@@ -134,7 +135,7 @@ class Transformer(nn.Module):
 
         for _ in range(depth):
             if mhsa_type == 'l':
-                attn = LocalMHRA(dim, heads = heads, dim_head = dim_head)
+                attn = LocalMHRA(dim, heads = heads, dim_head = dim_head, local_aggr_kernel = local_aggr_kernel)
             elif mhsa_type == 'g':
                 attn = GlobalMHRA(dim, heads = heads, dim_head = dim_head, dropout = attn_dropout)
             else:
@@ -164,6 +165,7 @@ class Uniformer(nn.Module):
         dims = (64, 128, 256, 512),
         depths = (3, 4, 8, 3),
         mhsa_types = ('l', 'l', 'g', 'g'),
+        local_aggr_kernel = 5,
         channels = 3,
         ff_mult = 4,
         dim_head = 64,
