@@ -190,6 +190,7 @@ class Uniformer(nn.Module):
                     dim = stage_dim,
                     depth = depth,
                     heads = heads,
+                    mhsa_type = mhsa_type,
                     ff_mult = ff_mult,
                     ff_dropout = ff_dropout,
                     attn_dropout = attn_dropout
