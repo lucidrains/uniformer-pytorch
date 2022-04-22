@@ -196,8 +196,8 @@ class Uniformer(nn.Module):
                     attn_dropout = attn_dropout
                 ),
                 nn.Sequential(
-                    LayerNorm(stage_dim),
                     nn.Conv3d(stage_dim, dims[ind + 1], (1, 2, 2), stride = (1, 2, 2)),
+                    LayerNorm(dims[ind + 1]),
                 ) if not is_last else None
             ]))
 
